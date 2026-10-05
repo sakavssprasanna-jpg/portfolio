@@ -176,19 +176,29 @@ export const ResumeControl: React.FC = () => {
   }, [selectedResumeId]);
 
   const handleSetActive = async (resume: ResumeVersion) => {
-    await dbService.saveResumeVersion({
-      ...resume,
-      is_current_approved: true
-    });
-    await loadResumes();
-    await refreshData();
+    try {
+      await dbService.saveResumeVersion({
+        ...resume,
+        is_current_approved: true
+      });
+      await loadResumes();
+      await refreshData();
+    } catch (err: any) {
+      console.error('Failed to set active resume', err);
+      alert(`Error setting active resume: ${err?.message || 'Unknown error'}`);
+    }
   };
 
   const handleDelete = async (id: string) => {
     if (confirm('Delete this resume version telemetry record?')) {
-      await dbService.deleteResume(id);
-      await loadResumes();
-      await refreshData();
+      try {
+        await dbService.deleteResume(id);
+        await loadResumes();
+        await refreshData();
+      } catch (err: any) {
+        console.error('Failed to delete resume', err);
+        alert(`Error deleting resume: ${err?.message || 'Unknown error'}`);
+      }
     }
   };
 
@@ -205,17 +215,27 @@ export const ResumeControl: React.FC = () => {
   };
 
   const handleToggleVisibility = async (sec: ResumeCustomSection) => {
-    const updated: ResumeCustomSection = { ...sec, visible: !sec.visible };
-    await dbService.saveCustomSection(updated);
-    await loadCustomSections(selectedResumeId);
-    await refreshData();
+    try {
+      const updated: ResumeCustomSection = { ...sec, visible: !sec.visible };
+      await dbService.saveCustomSection(updated);
+      await loadCustomSections(selectedResumeId);
+      await refreshData();
+    } catch (err: any) {
+      console.error('Failed to toggle visibility', err);
+      alert(`Error toggling visibility: ${err?.message || 'Unknown error'}`);
+    }
   };
 
   const handleDeleteSection = async (secId: string) => {
     if (confirm('Delete this custom resume section?')) {
-      await dbService.deleteCustomSection(secId);
-      await loadCustomSections(selectedResumeId);
-      await refreshData();
+      try {
+        await dbService.deleteCustomSection(secId);
+        await loadCustomSections(selectedResumeId);
+        await refreshData();
+      } catch (err: any) {
+        console.error('Failed to delete section', err);
+        alert(`Error deleting section: ${err?.message || 'Unknown error'}`);
+      }
     }
   };
 
@@ -268,10 +288,15 @@ export const ResumeControl: React.FC = () => {
       updated_at: new Date().toISOString()
     };
 
-    await dbService.saveCustomSection(sectionToSave);
-    await loadCustomSections(selectedResumeId);
-    await refreshData();
-    setIsSectionModalOpen(false);
+    try {
+      await dbService.saveCustomSection(sectionToSave);
+      await loadCustomSections(selectedResumeId);
+      await refreshData();
+      setIsSectionModalOpen(false);
+    } catch (err: any) {
+      console.error('Failed to save custom section', err);
+      alert(`Error saving custom section: ${err?.message || 'Unknown error'}`);
+    }
   };
 
   const handleManualUpload = async (e: React.FormEvent) => {

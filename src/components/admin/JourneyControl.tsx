@@ -58,8 +58,13 @@ export const JourneyControl: React.FC = () => {
 
   const handleDelete = async (id: string) => {
     if (confirm('Delete this journey waypoint?')) {
-      await dbService.deleteJourneyEntry(id);
-      await refreshData();
+      try {
+        await dbService.deleteJourneyEntry(id);
+        await refreshData();
+      } catch (err: any) {
+        console.error('Failed to delete journey entry', err);
+        alert(`Error deleting journey waypoint: ${err?.message || 'Unknown error'}`);
+      }
     }
   };
 
@@ -113,9 +118,9 @@ export const JourneyControl: React.FC = () => {
       await refreshData();
       setIsModalOpen(false);
       setEditingEntry(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to save journey entry', err);
-      alert('Error saving journey entry.');
+      alert(`Error saving journey waypoint: ${err?.message || 'Unknown error'}`);
     } finally {
       setIsSaving(false);
     }

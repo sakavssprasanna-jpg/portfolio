@@ -127,17 +127,22 @@ export const ProjectControl: React.FC = () => {
       setStatusMessage({ text: `Project cloned successfully as "${duplicatedTitle}".`, type: 'success' });
       // Open cloned project in editor immediately
       handleOpenEdit(cloned);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to clone project', err);
-      alert('Error duplicating project mission.');
+      alert(`Error duplicating project mission: ${err?.message || 'Unknown error'}`);
     }
   };
 
   const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to decommission this project mission?')) {
-      await dbService.deleteProject(id);
-      await refreshData();
-      setStatusMessage({ text: 'Project deleted successfully.', type: 'success' });
+      try {
+        await dbService.deleteProject(id);
+        await refreshData();
+        setStatusMessage({ text: 'Project deleted successfully.', type: 'success' });
+      } catch (err: any) {
+        console.error('Failed to delete project', err);
+        alert(`Error deleting project: ${err?.message || 'Unknown error'}`);
+      }
     }
   };
 
@@ -333,9 +338,9 @@ export const ProjectControl: React.FC = () => {
       setIsModalOpen(false);
       setEditingProject(null);
       setStatusMessage({ text: `Project "${finalProject.title}" saved successfully.`, type: 'success' });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to save project', err);
-      alert('Error saving project mission.');
+      alert(`Error saving project mission: ${err?.message || 'Unknown error'}`);
     } finally {
       setIsSaving(false);
     }

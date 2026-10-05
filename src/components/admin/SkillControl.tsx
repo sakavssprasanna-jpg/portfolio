@@ -33,8 +33,13 @@ export const SkillControl: React.FC = () => {
 
   const handleDelete = async (id: string) => {
     if (confirm('Delete this skill node from the constellation?')) {
-      await dbService.deleteSkill(id);
-      await refreshData();
+      try {
+        await dbService.deleteSkill(id);
+        await refreshData();
+      } catch (err: any) {
+        console.error('Failed to delete skill', err);
+        alert(`Error deleting skill: ${err?.message || 'Unknown error'}`);
+      }
     }
   };
 
@@ -66,9 +71,9 @@ export const SkillControl: React.FC = () => {
       await refreshData();
       setIsModalOpen(false);
       setEditingSkill(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to save skill', err);
-      alert('Error saving skill.');
+      alert(`Error saving skill: ${err?.message || 'Unknown error'}`);
     } finally {
       setIsSaving(false);
     }

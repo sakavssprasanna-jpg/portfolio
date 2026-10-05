@@ -161,8 +161,13 @@ export const MediaLibrary: React.FC = () => {
       } catch (err) {
         console.warn('Storage delete exception (continuing with database record):', err);
       }
-      await dbService.deleteMediaAsset(id);
-      await loadMedia();
+      try {
+        await dbService.deleteMediaAsset(id);
+        await loadMedia();
+      } catch (err: any) {
+        console.error('Failed to delete media asset', err);
+        alert(`Error deleting media asset: ${err?.message || 'Unknown error'}`);
+      }
     }
   };
 
@@ -204,15 +209,20 @@ export const MediaLibrary: React.FC = () => {
       created_at: new Date().toISOString()
     };
 
-    await dbService.addMediaAsset(asset);
-    await loadMedia();
-    setIsModalOpen(false);
-    setNewAsset({
-      name: '',
-      url: '',
-      type: 'image',
-      category: 'projects'
-    });
+    try {
+      await dbService.addMediaAsset(asset);
+      await loadMedia();
+      setIsModalOpen(false);
+      setNewAsset({
+        name: '',
+        url: '',
+        type: 'image',
+        category: 'projects'
+      });
+    } catch (err: any) {
+      console.error('Failed to add media asset', err);
+      alert(`Error adding media asset: ${err?.message || 'Unknown error'}`);
+    }
   };
 
   const filteredAssets = activeCategory === 'all'

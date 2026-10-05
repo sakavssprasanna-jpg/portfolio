@@ -165,17 +165,23 @@ function setLocal<T>(key: string, value: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (err) {
-    console.error('Failed to save to local storage', err);
+    console.error('Failed to save to local storage mirror', err);
   }
 }
+
+// Track background auto-sync check once per session
+let autoSyncAttempted = false;
 
 export const dbService = {
   // --- PROFILES ---
   async getProfile(): Promise<Profile> {
     if (isSupabaseConfigured() && supabase) {
       try {
-        const { data, error } = await supabase.from('profiles').select('*').limit(1).single();
-        if (!error && data) return data as Profile;
+        const { data, error } = await supabase.from('profiles').select('*').limit(1).maybeSingle();
+        if (!error && data) {
+          setLocal(KEYS.PROFILE, data);
+          return data as Profile;
+        }
       } catch (err) {
         console.warn('Falling back to local profile mirror', err);
       }
@@ -188,10 +194,10 @@ export const dbService = {
     const updated = { ...current, ...profile, updated_at: new Date().toISOString() };
 
     if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('profiles').upsert(updated);
-      } catch (err) {
-        console.error('Error updating profile in Supabase', err);
+      const { error } = await supabase.from('profiles').upsert(updated);
+      if (error) {
+        console.error('Supabase profile update failed:', error);
+        throw new Error(`Cloud Database profile update failed: ${error.message}`);
       }
     }
     setLocal(KEYS.PROFILE, updated);
@@ -206,7 +212,17 @@ export const dbService = {
           .from('worlds')
           .select('*')
           .order('display_order', { ascending: true });
-        if (!error && data && data.length > 0) return data as World[];
+        if (!error && data) {
+          if (data.length > 0) {
+            setLocal(KEYS.WORLDS, data);
+            return data as World[];
+          } else {
+            // Seed INITIAL_WORLDS if Supabase worlds table is empty
+            await supabase.from('worlds').upsert(INITIAL_WORLDS);
+            setLocal(KEYS.WORLDS, INITIAL_WORLDS);
+            return INITIAL_WORLDS;
+          }
+        }
       } catch (err) {
         console.warn('Falling back to local worlds mirror', err);
       }
@@ -215,36 +231,38 @@ export const dbService = {
   },
 
   async saveWorld(world: World): Promise<World> {
+    const preparedWorld = { ...world, updated_at: new Date().toISOString() };
+
+    if (isSupabaseConfigured() && supabase) {
+      const { error } = await supabase.from('worlds').upsert(preparedWorld);
+      if (error) {
+        console.error('Supabase world save failed:', error);
+        throw new Error(`Cloud Database world save failed: ${error.message}`);
+      }
+    }
+
     const worlds = await this.getWorlds();
     const idx = worlds.findIndex(w => w.id === world.id);
     let updated: World[];
     if (idx >= 0) {
       updated = [...worlds];
-      updated[idx] = { ...world, updated_at: new Date().toISOString() };
+      updated[idx] = preparedWorld;
     } else {
-      updated = [...worlds, { ...world, updated_at: new Date().toISOString() }];
-    }
-
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('worlds').upsert(world);
-      } catch (err) {
-        console.error('Error saving world in Supabase', err);
-      }
+      updated = [...worlds, preparedWorld];
     }
     setLocal(KEYS.WORLDS, updated);
-    return world;
+    return preparedWorld;
   },
 
   async deleteWorld(worldId: string): Promise<void> {
-    const worlds = (await this.getWorlds()).filter(w => w.id !== worldId);
     if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('worlds').delete().eq('id', worldId);
-      } catch (err) {
-        console.error('Error deleting world in Supabase', err);
+      const { error } = await supabase.from('worlds').delete().eq('id', worldId);
+      if (error) {
+        console.error('Supabase world delete failed:', error);
+        throw new Error(`Cloud Database world delete failed: ${error.message}`);
       }
     }
+    const worlds = (await this.getWorlds()).filter(w => w.id !== worldId);
     setLocal(KEYS.WORLDS, worlds);
   },
 
@@ -257,7 +275,8 @@ export const dbService = {
 
     if (isSupabaseConfigured() && supabase) {
       for (const w of updated) {
-        await supabase.from('worlds').update({ display_order: w.display_order }).eq('id', w.id);
+        const { error } = await supabase.from('worlds').update({ display_order: w.display_order }).eq('id', w.id);
+        if (error) console.error(`Failed to update world order for ${w.id}:`, error.message);
       }
     }
     setLocal(KEYS.WORLDS, updated);
@@ -271,46 +290,79 @@ export const dbService = {
           .from('projects')
           .select('*')
           .order('display_order', { ascending: true });
-        if (!error && data && data.length > 0) return data as Project[];
+        if (!error && data) {
+          if (data.length > 0) {
+            setLocal(KEYS.PROJECTS, data);
+            return data as Project[];
+          }
+          // Supabase has 0 projects: check if we should auto-sync local projects
+          this.triggerAutoSyncIfEmpty();
+          const local = getLocal<Project[]>(KEYS.PROJECTS, []);
+          if (local.length > 0) return local;
+          return [];
+        }
       } catch (err) {
         console.warn('Falling back to local projects mirror', err);
       }
     }
-    // Strict adherence to Rule #28: NO FAKE DATA! Empty array initially.
     return getLocal<Project[]>(KEYS.PROJECTS, []);
   },
 
   async saveProject(project: Project): Promise<Project> {
+    const sanitizedWorldId = (project.world_id && project.world_id.trim()) ? project.world_id.trim() : null;
+    const preparedProject: Project = {
+      ...project,
+      world_id: sanitizedWorldId as any,
+      updated_at: new Date().toISOString()
+    };
+
+    if (isSupabaseConfigured() && supabase) {
+      // Ensure world sector exists in Supabase if referencing an initial world
+      if (sanitizedWorldId) {
+        const matchInitial = INITIAL_WORLDS.find(w => w.id === sanitizedWorldId);
+        if (matchInitial) {
+          await supabase.from('worlds').upsert(matchInitial);
+        }
+      }
+
+      let { error } = await supabase.from('projects').upsert(preparedProject);
+      
+      // If foreign key constraint failed, retry with world_id: null to prevent project loss
+      if (error && sanitizedWorldId && error.code === '23503') {
+        console.warn(`Foreign key violation on world_id "${sanitizedWorldId}". Retrying save with world_id: null...`);
+        const fallbackProject = { ...preparedProject, world_id: null as any };
+        const retryResult = await supabase.from('projects').upsert(fallbackProject);
+        error = retryResult.error;
+      }
+
+      if (error) {
+        console.error('Supabase project save failed:', error);
+        throw new Error(`Cloud Database project save failed: ${error.message}`);
+      }
+    }
+
     const projects = await this.getProjects();
     const idx = projects.findIndex(p => p.id === project.id);
     let updated: Project[];
     if (idx >= 0) {
       updated = [...projects];
-      updated[idx] = { ...project, updated_at: new Date().toISOString() };
+      updated[idx] = preparedProject;
     } else {
-      updated = [...projects, { ...project, updated_at: new Date().toISOString() }];
-    }
-
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('projects').upsert(project);
-      } catch (err) {
-        console.error('Error saving project in Supabase', err);
-      }
+      updated = [...projects, preparedProject];
     }
     setLocal(KEYS.PROJECTS, updated);
-    return project;
+    return preparedProject;
   },
 
   async deleteProject(projectId: string): Promise<void> {
-    const projects = (await this.getProjects()).filter(p => p.id !== projectId);
     if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('projects').delete().eq('id', projectId);
-      } catch (err) {
-        console.error('Error deleting project in Supabase', err);
+      const { error } = await supabase.from('projects').delete().eq('id', projectId);
+      if (error) {
+        console.error('Supabase project delete failed:', error);
+        throw new Error(`Cloud Database project delete failed: ${error.message}`);
       }
     }
+    const projects = (await this.getProjects()).filter(p => p.id !== projectId);
     setLocal(KEYS.PROJECTS, projects);
   },
 
@@ -322,7 +374,16 @@ export const dbService = {
           .from('skills')
           .select('*')
           .order('display_order', { ascending: true });
-        if (!error && data && data.length > 0) return data as Skill[];
+        if (!error && data) {
+          if (data.length > 0) {
+            setLocal(KEYS.SKILLS, data);
+            return data as Skill[];
+          }
+          this.triggerAutoSyncIfEmpty();
+          const local = getLocal<Skill[]>(KEYS.SKILLS, []);
+          if (local.length > 0) return local;
+          return [];
+        }
       } catch (err) {
         console.warn('Falling back to local skills mirror', err);
       }
@@ -331,6 +392,14 @@ export const dbService = {
   },
 
   async saveSkill(skill: Skill): Promise<Skill> {
+    if (isSupabaseConfigured() && supabase) {
+      const { error } = await supabase.from('skills').upsert(skill);
+      if (error) {
+        console.error('Supabase skill save failed:', error);
+        throw new Error(`Cloud Database skill save failed: ${error.message}`);
+      }
+    }
+
     const skills = await this.getSkills();
     const idx = skills.findIndex(s => s.id === skill.id);
     let updated: Skill[];
@@ -340,27 +409,19 @@ export const dbService = {
     } else {
       updated = [...skills, skill];
     }
-
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('skills').upsert(skill);
-      } catch (err) {
-        console.error('Error saving skill in Supabase', err);
-      }
-    }
     setLocal(KEYS.SKILLS, updated);
     return skill;
   },
 
   async deleteSkill(skillId: string): Promise<void> {
-    const skills = (await this.getSkills()).filter(s => s.id !== skillId);
     if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('skills').delete().eq('id', skillId);
-      } catch (err) {
-        console.error('Error deleting skill in Supabase', err);
+      const { error } = await supabase.from('skills').delete().eq('id', skillId);
+      if (error) {
+        console.error('Supabase skill delete failed:', error);
+        throw new Error(`Cloud Database skill delete failed: ${error.message}`);
       }
     }
+    const skills = (await this.getSkills()).filter(s => s.id !== skillId);
     setLocal(KEYS.SKILLS, skills);
   },
 
@@ -373,7 +434,8 @@ export const dbService = {
 
     if (isSupabaseConfigured() && supabase) {
       for (const s of updated) {
-        await supabase.from('skills').update({ display_order: s.display_order }).eq('id', s.id);
+        const { error } = await supabase.from('skills').update({ display_order: s.display_order }).eq('id', s.id);
+        if (error) console.error(`Failed to update skill order for ${s.id}:`, error.message);
       }
     }
     setLocal(KEYS.SKILLS, updated);
@@ -387,7 +449,16 @@ export const dbService = {
           .from('journey_entries')
           .select('*')
           .order('display_order', { ascending: true });
-        if (!error && data && data.length > 0) return data as JourneyEntry[];
+        if (!error && data) {
+          if (data.length > 0) {
+            setLocal(KEYS.JOURNEY, data);
+            return data as JourneyEntry[];
+          }
+          this.triggerAutoSyncIfEmpty();
+          const local = getLocal<JourneyEntry[]>(KEYS.JOURNEY, []);
+          if (local.length > 0) return local;
+          return [];
+        }
       } catch (err) {
         console.warn('Falling back to local journey mirror', err);
       }
@@ -396,6 +467,14 @@ export const dbService = {
   },
 
   async saveJourneyEntry(entry: JourneyEntry): Promise<JourneyEntry> {
+    if (isSupabaseConfigured() && supabase) {
+      const { error } = await supabase.from('journey_entries').upsert(entry);
+      if (error) {
+        console.error('Supabase journey entry save failed:', error);
+        throw new Error(`Cloud Database journey save failed: ${error.message}`);
+      }
+    }
+
     const journey = await this.getJourney();
     const idx = journey.findIndex(j => j.id === entry.id);
     let updated: JourneyEntry[];
@@ -405,27 +484,19 @@ export const dbService = {
     } else {
       updated = [...journey, entry];
     }
-
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('journey_entries').upsert(entry);
-      } catch (err) {
-        console.error('Error saving journey entry in Supabase', err);
-      }
-    }
     setLocal(KEYS.JOURNEY, updated);
     return entry;
   },
 
   async deleteJourneyEntry(id: string): Promise<void> {
-    const journey = (await this.getJourney()).filter(j => j.id !== id);
     if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('journey_entries').delete().eq('id', id);
-      } catch (err) {
-        console.error('Error deleting journey entry in Supabase', err);
+      const { error } = await supabase.from('journey_entries').delete().eq('id', id);
+      if (error) {
+        console.error('Supabase journey delete failed:', error);
+        throw new Error(`Cloud Database journey delete failed: ${error.message}`);
       }
     }
+    const journey = (await this.getJourney()).filter(j => j.id !== id);
     setLocal(KEYS.JOURNEY, journey);
   },
 
@@ -438,7 +509,8 @@ export const dbService = {
 
     if (isSupabaseConfigured() && supabase) {
       for (const j of updated) {
-        await supabase.from('journey_entries').update({ display_order: j.display_order }).eq('id', j.id);
+        const { error } = await supabase.from('journey_entries').update({ display_order: j.display_order }).eq('id', j.id);
+        if (error) console.error(`Failed to update journey order for ${j.id}:`, error.message);
       }
     }
     setLocal(KEYS.JOURNEY, updated);
@@ -452,7 +524,16 @@ export const dbService = {
           .from('achievements')
           .select('*')
           .order('display_order', { ascending: true });
-        if (!error && data && data.length > 0) return data as Achievement[];
+        if (!error && data) {
+          if (data.length > 0) {
+            setLocal(KEYS.ACHIEVEMENTS, data);
+            return data as Achievement[];
+          }
+          this.triggerAutoSyncIfEmpty();
+          const local = getLocal<Achievement[]>(KEYS.ACHIEVEMENTS, []);
+          if (local.length > 0) return local;
+          return [];
+        }
       } catch (err) {
         console.warn('Falling back to local achievements mirror', err);
       }
@@ -461,6 +542,14 @@ export const dbService = {
   },
 
   async saveAchievement(achievement: Achievement): Promise<Achievement> {
+    if (isSupabaseConfigured() && supabase) {
+      const { error } = await supabase.from('achievements').upsert(achievement);
+      if (error) {
+        console.error('Supabase achievement save failed:', error);
+        throw new Error(`Cloud Database achievement save failed: ${error.message}`);
+      }
+    }
+
     const items = await this.getAchievements();
     const idx = items.findIndex(a => a.id === achievement.id);
     let updated: Achievement[];
@@ -470,27 +559,19 @@ export const dbService = {
     } else {
       updated = [...items, achievement];
     }
-
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('achievements').upsert(achievement);
-      } catch (err) {
-        console.error('Error saving achievement in Supabase', err);
-      }
-    }
     setLocal(KEYS.ACHIEVEMENTS, updated);
     return achievement;
   },
 
   async deleteAchievement(id: string): Promise<void> {
-    const items = (await this.getAchievements()).filter(a => a.id !== id);
     if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('achievements').delete().eq('id', id);
-      } catch (err) {
-        console.error('Error deleting achievement in Supabase', err);
+      const { error } = await supabase.from('achievements').delete().eq('id', id);
+      if (error) {
+        console.error('Supabase achievement delete failed:', error);
+        throw new Error(`Cloud Database achievement delete failed: ${error.message}`);
       }
     }
+    const items = (await this.getAchievements()).filter(a => a.id !== id);
     setLocal(KEYS.ACHIEVEMENTS, items);
   },
 
@@ -504,12 +585,14 @@ export const dbService = {
           .eq('is_current_approved', true)
           .limit(1)
           .maybeSingle();
-        if (!error && data) return data as ResumeVersion;
+        if (!error && data) {
+          return data as ResumeVersion;
+        }
       } catch (err) {
-        console.warn('Falling back to local resumes mirror', err);
+        console.warn('Falling back to local approved resume mirror', err);
       }
     }
-    const all = getLocal<ResumeVersion[]>(KEYS.RESUMES, []);
+    const all = await this.getAllResumes();
     return all.find(r => r.is_current_approved) || null;
   },
 
@@ -520,7 +603,15 @@ export const dbService = {
           .from('resumes')
           .select('*')
           .order('upload_date', { ascending: false });
-        if (!error && data && data.length > 0) return data as ResumeVersion[];
+        if (!error && data) {
+          if (data.length > 0) {
+            setLocal(KEYS.RESUMES, data);
+            return data as ResumeVersion[];
+          }
+          const local = getLocal<ResumeVersion[]>(KEYS.RESUMES, []);
+          if (local.length > 0) return local;
+          return [];
+        }
       } catch (err) {
         console.warn('Falling back to local resumes mirror', err);
       }
@@ -529,57 +620,58 @@ export const dbService = {
   },
 
   async saveResumeVersion(resume: ResumeVersion): Promise<ResumeVersion> {
+    if (isSupabaseConfigured() && supabase) {
+      if (resume.is_current_approved) {
+        const { error: unapproveErr } = await supabase
+          .from('resumes')
+          .update({ is_current_approved: false })
+          .neq('id', resume.id);
+        if (unapproveErr) console.warn('Supabase resume unapprove notice:', unapproveErr.message);
+      }
+
+      const { error } = await supabase.from('resumes').upsert(resume);
+      if (error) {
+        console.error('Supabase resume save failed:', error);
+        throw new Error(`Cloud Database resume save failed: ${error.message}`);
+      }
+    }
+
     const resumes = await this.getAllResumes();
-    let updated: ResumeVersion[];
-    
-    // If setting as approved, remove approved flag from others
     const processed = resume.is_current_approved
       ? resumes.map(r => ({ ...r, is_current_approved: false }))
       : resumes;
 
     const idx = processed.findIndex(r => r.id === resume.id);
+    let updated: ResumeVersion[];
     if (idx >= 0) {
       updated = [...processed];
       updated[idx] = resume;
     } else {
       updated = [resume, ...processed];
     }
-
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        if (resume.is_current_approved) {
-          await supabase.from('resumes').update({ is_current_approved: false }).neq('id', resume.id);
-        }
-        await supabase.from('resumes').upsert(resume);
-      } catch (err) {
-        console.error('Error saving resume in Supabase', err);
-      }
-    }
     setLocal(KEYS.RESUMES, updated);
     return resume;
   },
 
   async deleteResume(id: string): Promise<void> {
-    const resumes = (await this.getAllResumes()).filter(r => r.id !== id);
     if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('resumes').delete().eq('id', id);
-      } catch (err) {
-        console.error('Error deleting resume in Supabase', err);
+      const { error: secErr } = await supabase.from('resume_custom_sections').delete().eq('resume_id', id);
+      if (secErr) console.warn('Supabase delete custom sections notice:', secErr.message);
+
+      const { error } = await supabase.from('resumes').delete().eq('id', id);
+      if (error) {
+        console.error('Supabase resume delete failed:', error);
+        throw new Error(`Cloud Database resume delete failed: ${error.message}`);
       }
     }
+
+    const resumes = (await this.getAllResumes()).filter(r => r.id !== id);
     setLocal(KEYS.RESUMES, resumes);
-    // Clean up associated custom sections
+
+    // Clean up local custom sections mirror
     const allSections = getLocal<ResumeCustomSection[]>(KEYS.CUSTOM_SECTIONS, []);
     const remainingSections = allSections.filter(s => s.resume_id !== id);
     setLocal(KEYS.CUSTOM_SECTIONS, remainingSections);
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('resume_custom_sections').delete().eq('resume_id', id);
-      } catch (err) {
-        console.error('Error deleting resume custom sections in Supabase', err);
-      }
-    }
   },
 
   // --- RESUME CUSTOM SECTIONS ---
@@ -597,7 +689,10 @@ export const dbService = {
           query = query.eq('resume_id', effectiveResumeId);
         }
         const { data, error } = await query;
-        if (!error && data && data.length > 0) return data as ResumeCustomSection[];
+        if (!error && data && data.length > 0) {
+          setLocal(KEYS.CUSTOM_SECTIONS, data);
+          return data as ResumeCustomSection[];
+        }
       } catch (err) {
         console.warn('Falling back to local custom sections mirror', err);
       }
@@ -609,7 +704,6 @@ export const dbService = {
       if (filtered.length > 0) {
         return filtered.sort((a, b) => a.display_order - b.display_order);
       }
-      // Check if the resume version itself holds custom_sections
       const resumes = getLocal<ResumeVersion[]>(KEYS.RESUMES, []);
       const matchedResume = resumes.find(r => r.id === effectiveResumeId);
       if (matchedResume?.custom_sections && matchedResume.custom_sections.length > 0) {
@@ -622,32 +716,42 @@ export const dbService = {
   },
 
   async saveCustomSection(section: ResumeCustomSection): Promise<ResumeCustomSection> {
-    const sections = getLocal<ResumeCustomSection[]>(KEYS.CUSTOM_SECTIONS, []);
-    const idx = sections.findIndex(s => s.id === section.id);
-    let updatedSections: ResumeCustomSection[];
-    
     const preparedSection: ResumeCustomSection = {
       ...section,
       updated_at: new Date().toISOString()
     };
 
+    if (isSupabaseConfigured() && supabase) {
+      const { error } = await supabase.from('resume_custom_sections').upsert(preparedSection);
+      if (error) {
+        console.error('Supabase custom section save failed:', error);
+        throw new Error(`Cloud Database custom section save failed: ${error.message}`);
+      }
+
+      // Keep parent resume column updated in Supabase
+      if (preparedSection.resume_id) {
+        const targetResume = (await this.getAllResumes()).find(r => r.id === preparedSection.resume_id);
+        if (targetResume) {
+          const currentSections = await this.getCustomSections(preparedSection.resume_id);
+          const cIdx = currentSections.findIndex(s => s.id === preparedSection.id);
+          const updatedCustom = cIdx >= 0 ? [...currentSections] : [...currentSections, preparedSection];
+          if (cIdx >= 0) updatedCustom[cIdx] = preparedSection;
+          await supabase.from('resumes').update({ custom_sections: updatedCustom }).eq('id', targetResume.id);
+        }
+      }
+    }
+
+    const sections = getLocal<ResumeCustomSection[]>(KEYS.CUSTOM_SECTIONS, []);
+    const idx = sections.findIndex(s => s.id === section.id);
+    let updatedSections: ResumeCustomSection[];
     if (idx >= 0) {
       updatedSections = [...sections];
       updatedSections[idx] = preparedSection;
     } else {
       updatedSections = [...sections, preparedSection];
     }
-
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('resume_custom_sections').upsert(preparedSection);
-      } catch (err) {
-        console.error('Error saving custom section in Supabase', err);
-      }
-    }
     setLocal(KEYS.CUSTOM_SECTIONS, updatedSections);
 
-    // Keep associated resume version synchronized
     if (preparedSection.resume_id) {
       const resumes = getLocal<ResumeVersion[]>(KEYS.RESUMES, []);
       const targetResume = resumes.find(r => r.id === preparedSection.resume_id);
@@ -663,13 +767,6 @@ export const dbService = {
         }
         targetResume.custom_sections = updatedCustom;
         setLocal(KEYS.RESUMES, resumes);
-        if (isSupabaseConfigured() && supabase) {
-          try {
-            await supabase.from('resumes').update({ custom_sections: updatedCustom }).eq('id', targetResume.id);
-          } catch (err) {
-            console.error('Error updating resume custom sections column in Supabase', err);
-          }
-        }
       }
     }
 
@@ -677,20 +774,19 @@ export const dbService = {
   },
 
   async deleteCustomSection(id: string): Promise<void> {
+    if (isSupabaseConfigured() && supabase) {
+      const { error } = await supabase.from('resume_custom_sections').delete().eq('id', id);
+      if (error) {
+        console.error('Supabase custom section delete failed:', error);
+        throw new Error(`Cloud Database custom section delete failed: ${error.message}`);
+      }
+    }
+
     const sections = getLocal<ResumeCustomSection[]>(KEYS.CUSTOM_SECTIONS, []);
     const target = sections.find(s => s.id === id);
     const updated = sections.filter(s => s.id !== id);
-    
-    if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('resume_custom_sections').delete().eq('id', id);
-      } catch (err) {
-        console.error('Error deleting custom section in Supabase', err);
-      }
-    }
     setLocal(KEYS.CUSTOM_SECTIONS, updated);
 
-    // Also remove from matching resume version if applicable
     if (target?.resume_id) {
       const resumes = getLocal<ResumeVersion[]>(KEYS.RESUMES, []);
       const targetResume = resumes.find(r => r.id === target.resume_id);
@@ -702,6 +798,14 @@ export const dbService = {
   },
 
   async reorderCustomSections(orderedIds: string[], resumeId?: string): Promise<void> {
+    if (isSupabaseConfigured() && supabase) {
+      for (const id of orderedIds) {
+        const order = orderedIds.indexOf(id) + 1;
+        const { error } = await supabase.from('resume_custom_sections').update({ display_order: order }).eq('id', id);
+        if (error) console.error(`Failed to reorder section ${id}:`, error.message);
+      }
+    }
+
     const all = getLocal<ResumeCustomSection[]>(KEYS.CUSTOM_SECTIONS, []);
     const updated = all.map(section => {
       const matchIndex = orderedIds.indexOf(section.id);
@@ -710,13 +814,6 @@ export const dbService = {
       }
       return section;
     });
-
-    if (isSupabaseConfigured() && supabase) {
-      for (const id of orderedIds) {
-        const order = orderedIds.indexOf(id) + 1;
-        await supabase.from('resume_custom_sections').update({ display_order: order }).eq('id', id);
-      }
-    }
     setLocal(KEYS.CUSTOM_SECTIONS, updated);
 
     if (resumeId) {
@@ -737,7 +834,15 @@ export const dbService = {
     if (isSupabaseConfigured() && supabase) {
       try {
         const { data, error } = await supabase.from('media_assets').select('*').order('created_at', { ascending: false });
-        if (!error && data && data.length > 0) return data as MediaAsset[];
+        if (!error && data) {
+          if (data.length > 0) {
+            setLocal(KEYS.MEDIA, data);
+            return data as MediaAsset[];
+          }
+          const local = getLocal<MediaAsset[]>(KEYS.MEDIA, []);
+          if (local.length > 0) return local;
+          return [];
+        }
       } catch (err) {
         console.warn('Falling back to local media mirror', err);
       }
@@ -746,28 +851,28 @@ export const dbService = {
   },
 
   async addMediaAsset(asset: MediaAsset): Promise<MediaAsset> {
-    const list = await this.getMediaAssets();
-    const updated = [asset, ...list];
     if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('media_assets').insert(asset);
-      } catch (err) {
-        console.error('Error saving media asset in Supabase', err);
+      const { error } = await supabase.from('media_assets').insert(asset);
+      if (error) {
+        console.error('Supabase media asset insert failed:', error);
+        throw new Error(`Cloud Database media asset save failed: ${error.message}`);
       }
     }
+    const list = await this.getMediaAssets();
+    const updated = [asset, ...list];
     setLocal(KEYS.MEDIA, updated);
     return asset;
   },
 
   async deleteMediaAsset(id: string): Promise<void> {
-    const list = (await this.getMediaAssets()).filter(m => m.id !== id);
     if (isSupabaseConfigured() && supabase) {
-      try {
-        await supabase.from('media_assets').delete().eq('id', id);
-      } catch (err) {
-        console.error('Error deleting media asset in Supabase', err);
+      const { error } = await supabase.from('media_assets').delete().eq('id', id);
+      if (error) {
+        console.error('Supabase media asset delete failed:', error);
+        throw new Error(`Cloud Database media asset delete failed: ${error.message}`);
       }
     }
+    const list = (await this.getMediaAssets()).filter(m => m.id !== id);
     setLocal(KEYS.MEDIA, list);
   },
 
@@ -788,76 +893,146 @@ export const dbService = {
     };
   },
 
+  // --- BACKGROUND HELPER: AUTO-SYNC LOCAL DATA IF CLOUD IS EMPTY ---
+  triggerAutoSyncIfEmpty(): void {
+    if (autoSyncAttempted || !isSupabaseConfigured() || !supabase) return;
+    autoSyncAttempted = true;
+
+    // Run asynchronously without blocking immediate UI rendering
+    setTimeout(async () => {
+      try {
+        const localProjects = getLocal<Project[]>(KEYS.PROJECTS, []);
+        const localSkills = getLocal<Skill[]>(KEYS.SKILLS, []);
+        const localJourney = getLocal<JourneyEntry[]>(KEYS.JOURNEY, []);
+        const localAchievements = getLocal<Achievement[]>(KEYS.ACHIEVEMENTS, []);
+
+        const totalLocalRecords = localProjects.length + localSkills.length + localJourney.length + localAchievements.length;
+        if (totalLocalRecords > 0) {
+          console.info(`Initial cloud synchronization: Migrating ${totalLocalRecords} local portfolio items to connected Supabase Cloud database...`);
+          await this.syncLocalToSupabase();
+        }
+      } catch (err) {
+        console.warn('Initial cloud migration notice:', err);
+      }
+    }, 100);
+  },
+
   // --- SAFE DATA MIGRATION: LOCAL VAULT -> SUPABASE CLOUD ---
   async syncLocalToSupabase(): Promise<{ success: boolean; count: number; error?: string }> {
     if (!isSupabaseConfigured() || !supabase) {
-      return { success: false, count: 0, error: 'Supabase is not configured yet. Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY first.' };
+      return { 
+        success: false, 
+        count: 0, 
+        error: 'Supabase is not configured yet. Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY first.' 
+      };
     }
 
     try {
       let syncedCount = 0;
+      const errors: string[] = [];
 
       // 1. Profile
       const localProfile = getLocal<Profile | null>(KEYS.PROFILE, null);
       if (localProfile) {
         const { error } = await supabase.from('profiles').upsert(localProfile);
-        if (!error) syncedCount++;
+        if (error) errors.push(`Profile: ${error.message}`);
+        else syncedCount++;
       }
 
-      // 2. Worlds
-      const localWorlds = getLocal<World[]>(KEYS.WORLDS, []);
-      for (const w of localWorlds) {
+      // 2. Worlds (Ensure INITIAL_WORLDS and localWorlds exist in Supabase first so FK constraints succeed)
+      const localWorlds = getLocal<World[]>(KEYS.WORLDS, INITIAL_WORLDS);
+      const combinedWorlds = [...INITIAL_WORLDS];
+      for (const lw of localWorlds) {
+        const idx = combinedWorlds.findIndex(w => w.id === lw.id);
+        if (idx >= 0) combinedWorlds[idx] = lw;
+        else combinedWorlds.push(lw);
+      }
+      for (const w of combinedWorlds) {
         const { error } = await supabase.from('worlds').upsert(w);
-        if (!error) syncedCount++;
+        if (error) errors.push(`World (${w.name}): ${error.message}`);
+        else syncedCount++;
       }
 
       // 3. Projects
       const localProjects = getLocal<Project[]>(KEYS.PROJECTS, []);
       for (const p of localProjects) {
-        const { error } = await supabase.from('projects').upsert(p);
-        if (!error) syncedCount++;
+        const sanitizedWorldId = (p.world_id && p.world_id.trim()) ? p.world_id.trim() : null;
+        let payload = { ...p, world_id: sanitizedWorldId };
+        
+        let { error } = await supabase.from('projects').upsert(payload);
+        // If foreign key constraint failed, retry with world_id: null to prevent project loss
+        if (error && sanitizedWorldId && error.code === '23503') {
+          console.warn(`Foreign key issue on project "${p.title}" with world "${sanitizedWorldId}". Retrying with world_id: null...`);
+          payload = { ...p, world_id: null };
+          const retry = await supabase.from('projects').upsert(payload);
+          error = retry.error;
+        }
+
+        if (error) errors.push(`Project (${p.title}): ${error.message}`);
+        else syncedCount++;
       }
 
       // 4. Skills
       const localSkills = getLocal<Skill[]>(KEYS.SKILLS, []);
       for (const s of localSkills) {
         const { error } = await supabase.from('skills').upsert(s);
-        if (!error) syncedCount++;
+        if (error) errors.push(`Skill (${s.name}): ${error.message}`);
+        else syncedCount++;
       }
 
       // 5. Journey
       const localJourney = getLocal<JourneyEntry[]>(KEYS.JOURNEY, []);
       for (const j of localJourney) {
         const { error } = await supabase.from('journey_entries').upsert(j);
-        if (!error) syncedCount++;
+        if (error) errors.push(`Journey (${j.title}): ${error.message}`);
+        else syncedCount++;
       }
 
       // 6. Achievements
       const localAchievements = getLocal<Achievement[]>(KEYS.ACHIEVEMENTS, []);
       for (const a of localAchievements) {
         const { error } = await supabase.from('achievements').upsert(a);
-        if (!error) syncedCount++;
+        if (error) errors.push(`Achievement (${a.title}): ${error.message}`);
+        else syncedCount++;
       }
 
       // 7. Resumes
       const localResumes = getLocal<ResumeVersion[]>(KEYS.RESUMES, []);
       for (const r of localResumes) {
         const { error } = await supabase.from('resumes').upsert(r);
-        if (!error) syncedCount++;
+        if (error) errors.push(`Resume (${r.version_name}): ${error.message}`);
+        else syncedCount++;
       }
 
       // 8. Custom Sections
       const localSections = getLocal<ResumeCustomSection[]>(KEYS.CUSTOM_SECTIONS, []);
       for (const cs of localSections) {
-        const { error } = await supabase.from('resume_custom_sections').upsert(cs);
-        if (!error) syncedCount++;
+        let payload = { ...cs };
+        let { error } = await supabase.from('resume_custom_sections').upsert(payload);
+        if (error && cs.resume_id && error.code === '23503') {
+          payload = { ...cs, resume_id: undefined as any };
+          const retry = await supabase.from('resume_custom_sections').upsert(payload);
+          error = retry.error;
+        }
+        if (error) errors.push(`Custom Section (${cs.title}): ${error.message}`);
+        else syncedCount++;
       }
 
       // 9. Media Assets catalog
       const localMedia = getLocal<MediaAsset[]>(KEYS.MEDIA, []);
       for (const m of localMedia) {
         const { error } = await supabase.from('media_assets').upsert(m);
-        if (!error) syncedCount++;
+        if (error) errors.push(`Media (${m.name}): ${error.message}`);
+        else syncedCount++;
+      }
+
+      if (errors.length > 0) {
+        console.warn('Some items encountered notices during Supabase sync:', errors);
+        return { 
+          success: syncedCount > 0, 
+          count: syncedCount, 
+          error: `Synchronized ${syncedCount} items, but ${errors.length} notice(s):\n${errors.slice(0, 3).join('\n')}${errors.length > 3 ? '\n...' : ''}` 
+        };
       }
 
       return { success: true, count: syncedCount };

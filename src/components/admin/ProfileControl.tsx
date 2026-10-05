@@ -96,9 +96,9 @@ export const ProfileControl: React.FC = () => {
       await refreshData();
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to update profile', err);
-      alert('Error updating profile.');
+      alert(`Error updating profile: ${err?.message || 'Unknown error'}`);
     } finally {
       setIsSaving(false);
     }

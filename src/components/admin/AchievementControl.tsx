@@ -81,8 +81,13 @@ export const AchievementControl: React.FC = () => {
 
   const handleDelete = async (id: string) => {
     if (confirm('Delete this achievement artifact?')) {
-      await dbService.deleteAchievement(id);
-      await refreshData();
+      try {
+        await dbService.deleteAchievement(id);
+        await refreshData();
+      } catch (err: any) {
+        console.error('Failed to delete achievement', err);
+        alert(`Error deleting achievement: ${err?.message || 'Unknown error'}`);
+      }
     }
   };
 
@@ -96,9 +101,9 @@ export const AchievementControl: React.FC = () => {
       await refreshData();
       setIsModalOpen(false);
       setEditingItem(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to save achievement', err);
-      alert('Error saving achievement.');
+      alert(`Error saving achievement: ${err?.message || 'Unknown error'}`);
     } finally {
       setIsSaving(false);
     }

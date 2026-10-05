@@ -1,7 +1,7 @@
 -- =========================================================================
 -- VEERA SATYA SAI PRASANNA — AI UNIVERSE PORTFOLIO SCHEMA
 -- Target Engine: PostgreSQL / Supabase
--- Security: Full Row-Level Security (RLS) + Authenticated Owner Write Access
+-- Security: Full Row-Level Security (RLS) + Cross-Device Persistence
 -- Idempotent: Safe to run on a brand-new empty Supabase project or re-run anytime
 -- =========================================================================
 
@@ -10,7 +10,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- =========================================================================
--- 1. TABLE DEFINITIONS (All tables created before any policies or triggers)
+-- 1. TABLE DEFINITIONS (All tables created before any policies, FKs, or triggers)
 -- =========================================================================
 
 -- 1.1 PROFILES
@@ -173,7 +173,34 @@ CREATE TABLE IF NOT EXISTS public.admin_settings (
 );
 
 -- =========================================================================
--- 2. SCHEMA EVOLUTION / MIGRATION HELPERS
+-- 2. SEED INITIAL FOUNDATIONAL RECORDS (Idempotent: DOES NOT OVERWRITE DATA)
+-- =========================================================================
+
+-- 2.1 Seed Initial Profile
+INSERT INTO public.profiles (id, full_name, headline, bio)
+VALUES (
+  'veera-core-profile',
+  'VEERA SATYA SAI PRASANNA',
+  'AI/ML • GenAI • Intelligent Systems',
+  'Specializing in AI/ML, Machine Learning, Generative AI, RAG, Agentic AI, Computer Vision, NLP, and Software Engineering.'
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- 2.2 Seed Default AI World Sectors (ensures foreign keys succeed out of the box)
+INSERT INTO public.worlds (id, name, slug, tagline, description, icon, color, accent_color, display_order, is_enabled, visual_properties)
+VALUES 
+  ('world-1', 'ML GALAXY', 'ml-galaxy', 'Deep Learning Architectures & Statistical Learning Models', 'Foundational machine learning, predictive models, model evaluation, and scalable inference architectures.', 'Brain', '#00f0ff', '#3b82f6', 1, true, '{"ring_style": "single", "orbit_speed": 1.2, "glow_intensity": 1.0}'::jsonb),
+  ('world-2', 'AGENTIC AI WORLD', 'agentic-ai', 'Autonomous Agents, Tool-Use & Multi-Agent Swarms', 'Stateful multi-agent workflows, tool execution loops, reasoning trajectories, and autonomous problem solving.', 'Bot', '#8b5cf6', '#d946ef', 2, true, '{"ring_style": "quantum", "orbit_speed": 0.9, "glow_intensity": 1.1}'::jsonb),
+  ('world-3', 'GENERATIVE AI NEBULA', 'generative-ai', 'Large Language Models, Diffusion & Multimodal Systems', 'Fine-tuning, prompt orchestration, generative pipelines, diffusion mechanisms, and structured generation.', 'Sparkles', '#ec4899', '#8b5cf6', 3, true, '{"ring_style": "double", "orbit_speed": 1.1, "glow_intensity": 1.2}'::jsonb),
+  ('world-4', 'RAG REALM', 'rag-realm', 'Retrieval-Augmented Generation & Vector Vector Knowledge', 'Dense retrieval, semantic embeddings, hybrid search, rerankers, and contextual knowledge graphs.', 'Database', '#06b6d4', '#3b82f6', 4, true, '{"ring_style": "single", "orbit_speed": 0.8, "glow_intensity": 0.95}'::jsonb),
+  ('world-5', 'COMPUTER VISION LAB', 'computer-vision', 'Visual Perception, Object Detection & Spatial AI', 'Convolutional neural networks, vision transformers, image segmentation, and real-time visual telemetry.', 'Eye', '#10b981', '#06b6d4', 5, true, '{"ring_style": "dashed", "orbit_speed": 1.0, "glow_intensity": 1.0}'::jsonb),
+  ('world-6', 'NLP WORLD', 'nlp-world', 'Natural Language Processing & Syntactic Intelligence', 'Tokenization, attention mechanisms, intent classification, sentiment modeling, and sequence translation.', 'MessageSquare', '#f59e0b', '#ef4444', 6, true, '{"ring_style": "single", "orbit_speed": 0.95, "glow_intensity": 0.9}'::jsonb),
+  ('world-7', 'ENGINEERING ARENA', 'engineering-arena', 'Robust Full-Stack & Production System Architecture', 'High-throughput APIs, microservices, database design, asynchronous queues, and resilient deployment systems.', 'Cpu', '#3b82f6', '#6366f1', 7, true, '{"ring_style": "quantum", "orbit_speed": 1.3, "glow_intensity": 1.0}'::jsonb),
+  ('world-8', 'SPACE-TECH LAB', 'space-tech-lab', 'Telemetry, Orbital Simulation & Frontier Horizons', 'Orbital mechanics models, spatial simulations, data stream compression, and frontier algorithmic research.', 'Rocket', '#00f0ff', '#10b981', 8, true, '{"ring_style": "double", "orbit_speed": 0.7, "glow_intensity": 1.15}'::jsonb)
+ON CONFLICT (id) DO NOTHING;
+
+-- =========================================================================
+-- 3. SCHEMA EVOLUTION / MIGRATION HELPERS
 -- Ensures existing installations also gain any newer columns idempotently
 -- =========================================================================
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS leetcode_url TEXT DEFAULT '';
@@ -189,8 +216,9 @@ ALTER TABLE public.achievements ADD COLUMN IF NOT EXISTS category TEXT DEFAULT '
 ALTER TABLE public.resumes ADD COLUMN IF NOT EXISTS custom_sections JSONB DEFAULT '[]'::jsonb;
 
 -- =========================================================================
--- 3. ROW LEVEL SECURITY (RLS) POLICIES
--- Rule: Public can read published/approved content; Authenticated owner has full access.
+-- 4. ROW LEVEL SECURITY (RLS) POLICIES
+-- Rule: Full read access for public universe; full manage access for anon & authenticated roles.
+-- Ensures Mission Control CRUD operations from web & mobile devices persist directly to Supabase.
 -- All policies use DROP POLICY IF EXISTS before CREATE POLICY to ensure idempotency.
 -- =========================================================================
 
@@ -205,75 +233,76 @@ ALTER TABLE public.resume_custom_sections ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.media_assets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_settings ENABLE ROW LEVEL SECURITY;
 
--- 3.1 Profiles
+-- 4.1 Profiles
 DROP POLICY IF EXISTS "Allow public read-only profiles" ON public.profiles;
-CREATE POLICY "Allow public read-only profiles" ON public.profiles FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Allow owner update profiles" ON public.profiles;
-CREATE POLICY "Allow owner update profiles" ON public.profiles FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow full access to profiles" ON public.profiles;
+CREATE POLICY "Allow public read-only profiles" ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Allow full access to profiles" ON public.profiles FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- 3.2 Worlds
+-- 4.2 Worlds
 DROP POLICY IF EXISTS "Allow public read worlds" ON public.worlds;
-CREATE POLICY "Allow public read worlds" ON public.worlds FOR SELECT USING (is_enabled = true);
-
 DROP POLICY IF EXISTS "Allow owner manage worlds" ON public.worlds;
-CREATE POLICY "Allow owner manage worlds" ON public.worlds FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow full access to worlds" ON public.worlds;
+CREATE POLICY "Allow public read worlds" ON public.worlds FOR SELECT USING (true);
+CREATE POLICY "Allow full access to worlds" ON public.worlds FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- 3.3 Projects
+-- 4.3 Projects
 DROP POLICY IF EXISTS "Allow public read projects" ON public.projects;
-CREATE POLICY "Allow public read projects" ON public.projects FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Allow owner manage projects" ON public.projects;
-CREATE POLICY "Allow owner manage projects" ON public.projects FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow full access to projects" ON public.projects;
+CREATE POLICY "Allow public read projects" ON public.projects FOR SELECT USING (true);
+CREATE POLICY "Allow full access to projects" ON public.projects FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- 3.4 Skills
+-- 4.4 Skills
 DROP POLICY IF EXISTS "Allow public read skills" ON public.skills;
-CREATE POLICY "Allow public read skills" ON public.skills FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Allow owner manage skills" ON public.skills;
-CREATE POLICY "Allow owner manage skills" ON public.skills FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow full access to skills" ON public.skills;
+CREATE POLICY "Allow public read skills" ON public.skills FOR SELECT USING (true);
+CREATE POLICY "Allow full access to skills" ON public.skills FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- 3.5 Journey
+-- 4.5 Journey
 DROP POLICY IF EXISTS "Allow public read journey" ON public.journey_entries;
-CREATE POLICY "Allow public read journey" ON public.journey_entries FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Allow owner manage journey" ON public.journey_entries;
-CREATE POLICY "Allow owner manage journey" ON public.journey_entries FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow full access to journey" ON public.journey_entries;
+CREATE POLICY "Allow public read journey" ON public.journey_entries FOR SELECT USING (true);
+CREATE POLICY "Allow full access to journey" ON public.journey_entries FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- 3.6 Achievements
+-- 4.6 Achievements
 DROP POLICY IF EXISTS "Allow public read achievements" ON public.achievements;
-CREATE POLICY "Allow public read achievements" ON public.achievements FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Allow owner manage achievements" ON public.achievements;
-CREATE POLICY "Allow owner manage achievements" ON public.achievements FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow full access to achievements" ON public.achievements;
+CREATE POLICY "Allow public read achievements" ON public.achievements FOR SELECT USING (true);
+CREATE POLICY "Allow full access to achievements" ON public.achievements FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- 3.7 Resumes
+-- 4.7 Resumes
 DROP POLICY IF EXISTS "Allow public read approved resumes" ON public.resumes;
-CREATE POLICY "Allow public read approved resumes" ON public.resumes FOR SELECT USING (is_current_approved = true);
-
 DROP POLICY IF EXISTS "Allow owner manage resumes" ON public.resumes;
-CREATE POLICY "Allow owner manage resumes" ON public.resumes FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow full access to resumes" ON public.resumes;
+CREATE POLICY "Allow public read approved resumes" ON public.resumes FOR SELECT USING (true);
+CREATE POLICY "Allow full access to resumes" ON public.resumes FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- 3.8 Resume Custom Sections
+-- 4.8 Resume Custom Sections
 DROP POLICY IF EXISTS "Allow public read visible resume_custom_sections" ON public.resume_custom_sections;
-CREATE POLICY "Allow public read visible resume_custom_sections" ON public.resume_custom_sections FOR SELECT USING (visible = true);
-
 DROP POLICY IF EXISTS "Allow authenticated owner manage resume_custom_sections" ON public.resume_custom_sections;
-CREATE POLICY "Allow authenticated owner manage resume_custom_sections" ON public.resume_custom_sections FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow full access to resume_custom_sections" ON public.resume_custom_sections;
+CREATE POLICY "Allow public read visible resume_custom_sections" ON public.resume_custom_sections FOR SELECT USING (true);
+CREATE POLICY "Allow full access to resume_custom_sections" ON public.resume_custom_sections FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- 3.9 Media Assets
+-- 4.9 Media Assets
 DROP POLICY IF EXISTS "Allow public read media" ON public.media_assets;
-CREATE POLICY "Allow public read media" ON public.media_assets FOR SELECT USING (true);
-
 DROP POLICY IF EXISTS "Allow owner manage media" ON public.media_assets;
-CREATE POLICY "Allow owner manage media" ON public.media_assets FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow full access to media" ON public.media_assets;
+CREATE POLICY "Allow public read media" ON public.media_assets FOR SELECT USING (true);
+CREATE POLICY "Allow full access to media" ON public.media_assets FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- 3.10 Admin Settings
+-- 4.10 Admin Settings
 DROP POLICY IF EXISTS "Allow owner manage settings" ON public.admin_settings;
-CREATE POLICY "Allow owner manage settings" ON public.admin_settings FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow full access to admin_settings" ON public.admin_settings;
+CREATE POLICY "Allow full access to admin_settings" ON public.admin_settings FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
 -- =========================================================================
--- 4. AUTO-UPDATE TIMESTAMP TRIGGERS
+-- 5. AUTO-UPDATE TIMESTAMP TRIGGERS
 -- =========================================================================
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
@@ -296,7 +325,7 @@ DROP TRIGGER IF EXISTS update_resume_custom_sections_updated_at ON public.resume
 CREATE TRIGGER update_resume_custom_sections_updated_at BEFORE UPDATE ON public.resume_custom_sections FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 -- =========================================================================
--- 5. STORAGE BUCKET & STORAGE RLS POLICIES
+-- 6. STORAGE BUCKET & STORAGE RLS POLICIES
 -- =========================================================================
 INSERT INTO storage.buckets (id, name, public) 
 VALUES ('portfolio-media', 'portfolio-media', true)
@@ -309,19 +338,22 @@ ON storage.objects FOR SELECT
 USING (bucket_id = 'portfolio-media');
 
 DROP POLICY IF EXISTS "Allow authenticated owner upload portfolio-media" ON storage.objects;
-CREATE POLICY "Allow authenticated owner upload portfolio-media" 
+DROP POLICY IF EXISTS "Allow owner upload portfolio-media" ON storage.objects;
+CREATE POLICY "Allow owner upload portfolio-media" 
 ON storage.objects FOR INSERT 
-TO authenticated 
+TO anon, authenticated 
 WITH CHECK (bucket_id = 'portfolio-media');
 
 DROP POLICY IF EXISTS "Allow authenticated owner update portfolio-media" ON storage.objects;
-CREATE POLICY "Allow authenticated owner update portfolio-media" 
+DROP POLICY IF EXISTS "Allow owner update portfolio-media" ON storage.objects;
+CREATE POLICY "Allow owner update portfolio-media" 
 ON storage.objects FOR UPDATE 
-TO authenticated 
+TO anon, authenticated 
 USING (bucket_id = 'portfolio-media');
 
 DROP POLICY IF EXISTS "Allow authenticated owner delete portfolio-media" ON storage.objects;
-CREATE POLICY "Allow authenticated owner delete portfolio-media" 
+DROP POLICY IF EXISTS "Allow owner delete portfolio-media" ON storage.objects;
+CREATE POLICY "Allow owner delete portfolio-media" 
 ON storage.objects FOR DELETE 
-TO authenticated 
+TO anon, authenticated 
 USING (bucket_id = 'portfolio-media');

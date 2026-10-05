@@ -51,8 +51,13 @@ export const WorldControl: React.FC = () => {
 
   const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to delete this AI World sector?')) {
-      await dbService.deleteWorld(id);
-      await refreshData();
+      try {
+        await dbService.deleteWorld(id);
+        await refreshData();
+      } catch (err: any) {
+        console.error('Failed to delete world', err);
+        alert(`Error deleting AI World sector: ${err?.message || 'Unknown error'}`);
+      }
     }
   };
 
@@ -83,9 +88,9 @@ export const WorldControl: React.FC = () => {
       await refreshData();
       setIsModalOpen(false);
       setEditingWorld(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to save world', err);
-      alert('Error saving AI World.');
+      alert(`Error saving AI World: ${err?.message || 'Unknown error'}`);
     } finally {
       setIsSaving(false);
     }
