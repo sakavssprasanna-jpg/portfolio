@@ -1,0 +1,273 @@
+-- =========================================================================
+-- VEERA SATYA SAI PRASANNA — AI UNIVERSE PORTFOLIO SCHEMA
+-- Target Engine: PostgreSQL / Supabase
+-- Security: Full Row-Level Security (RLS) + Authenticated Owner Write Access
+-- =========================================================================
+
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- 1. PROFILES
+CREATE TABLE IF NOT EXISTS public.profiles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    full_name TEXT NOT NULL DEFAULT 'VEERA SATYA SAI PRASANNA',
+    headline TEXT NOT NULL DEFAULT 'AI/ML • GenAI • Intelligent Systems',
+    bio TEXT NOT NULL DEFAULT 'Specializing in AI/ML, Machine Learning, Generative AI, RAG, Agentic AI, Computer Vision, NLP, and Software Engineering.',
+    email TEXT DEFAULT '',
+    location TEXT DEFAULT '',
+    avatar_url TEXT DEFAULT '',
+    github_url TEXT DEFAULT '',
+    linkedin_url TEXT DEFAULT '',
+    twitter_url TEXT DEFAULT '',
+    website_url TEXT DEFAULT '',
+    leetcode_url TEXT DEFAULT '',
+    hackerrank_url TEXT DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()),
+    updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW())
+);
+
+-- 2. AI WORLDS
+CREATE TABLE IF NOT EXISTS public.worlds (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    tagline TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    icon TEXT DEFAULT 'Brain',
+    color TEXT DEFAULT '#00f0ff',
+    accent_color TEXT DEFAULT '#3b82f6',
+    display_order INT DEFAULT 0,
+    is_enabled BOOLEAN DEFAULT true,
+    visual_properties JSONB DEFAULT '{"ring_style": "single", "orbit_speed": 1, "glow_intensity": 1}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()),
+    updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW())
+);
+
+-- 3. PROJECTS (Planets & Missions)
+CREATE TABLE IF NOT EXISTS public.projects (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    world_id UUID REFERENCES public.worlds(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    short_description TEXT DEFAULT '',
+    full_description TEXT DEFAULT '',
+    problem TEXT DEFAULT '',
+    solution TEXT DEFAULT '',
+    ai_ml_approach TEXT DEFAULT '',
+    architecture_diagram TEXT DEFAULT '',
+    tech_stack TEXT[] DEFAULT ARRAY[]::TEXT[],
+    features TEXT[] DEFAULT ARRAY[]::TEXT[],
+    my_contribution TEXT DEFAULT '',
+    challenges TEXT DEFAULT '',
+    solutions_developed TEXT DEFAULT '',
+    learnings TEXT DEFAULT '',
+    github_url TEXT DEFAULT '',
+    live_url TEXT DEFAULT '',
+    demo_video_url TEXT DEFAULT '',
+    documentation_url TEXT DEFAULT '',
+    screenshots TEXT[] DEFAULT ARRAY[]::TEXT[],
+    project_date TEXT DEFAULT '',
+    status TEXT DEFAULT 'completed', -- 'completed', 'in_development', 'research'
+    is_featured BOOLEAN DEFAULT false,
+    display_order INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()),
+    updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW())
+);
+
+-- 4. SKILLS & CONSTELLATIONS
+CREATE TABLE IF NOT EXISTS public.skills (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    category TEXT NOT NULL,
+    name TEXT NOT NULL,
+    proficiency INT DEFAULT NULL, -- Nullable! Not invented automatically
+    icon TEXT DEFAULT 'Sparkles',
+    related_skills TEXT[] DEFAULT ARRAY[]::TEXT[],
+    display_order INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW())
+);
+
+-- 5. MY JOURNEY (Orbital Timeline)
+CREATE TABLE IF NOT EXISTS public.journey_entries (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    title TEXT NOT NULL,
+    organization TEXT NOT NULL,
+    date_range TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    category TEXT DEFAULT 'experience', -- 'experience', 'education', 'milestone', 'research'
+    image_url TEXT DEFAULT '',
+    external_url TEXT DEFAULT '',
+    display_order INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW())
+);
+
+-- 6. ACHIEVEMENT GALAXY
+CREATE TABLE IF NOT EXISTS public.achievements (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    title TEXT NOT NULL,
+    organization TEXT NOT NULL,
+    date TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    certificate_url TEXT DEFAULT '',
+    certificate_file_url TEXT DEFAULT '',
+    external_url TEXT DEFAULT '',
+    image_url TEXT DEFAULT '',
+    display_order INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW())
+);
+
+-- 7. RESUME STATION & VERSIONS
+CREATE TABLE IF NOT EXISTS public.resumes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    file_name TEXT NOT NULL,
+    file_url TEXT NOT NULL,
+    version_name TEXT NOT NULL,
+    upload_date TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()),
+    is_current_approved BOOLEAN DEFAULT false,
+    extracted_data JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW())
+);
+
+-- 8. MEDIA ASSETS
+CREATE TABLE IF NOT EXISTS public.media_assets (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    type TEXT NOT NULL, -- 'image', 'video', 'document', 'diagram'
+    category TEXT DEFAULT 'general',
+    url TEXT NOT NULL,
+    size BIGINT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW())
+);
+
+-- 9. ADMIN SETTINGS
+CREATE TABLE IF NOT EXISTS public.admin_settings (
+    key TEXT PRIMARY KEY,
+    value JSONB DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW())
+);
+
+-- =========================================================================
+-- ROW LEVEL SECURITY (RLS) POLICIES
+-- Rule: Anyone can READ published/approved content; ONLY authenticated users
+-- (portfolio owner) can INSERT, UPDATE, DELETE.
+-- =========================================================================
+
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.worlds ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.skills ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.journey_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.achievements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.resumes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.media_assets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.admin_settings ENABLE ROW LEVEL SECURITY;
+
+-- Profiles: Public read, Authenticated write
+CREATE POLICY "Allow public read-only profiles" ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Allow owner update profiles" ON public.profiles FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Worlds: Public read enabled worlds, Authenticated full control
+CREATE POLICY "Allow public read worlds" ON public.worlds FOR SELECT USING (is_enabled = true);
+CREATE POLICY "Allow owner manage worlds" ON public.worlds FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Projects: Public read, Authenticated manage
+CREATE POLICY "Allow public read projects" ON public.projects FOR SELECT USING (true);
+CREATE POLICY "Allow owner manage projects" ON public.projects FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Skills: Public read, Authenticated manage
+CREATE POLICY "Allow public read skills" ON public.skills FOR SELECT USING (true);
+CREATE POLICY "Allow owner manage skills" ON public.skills FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Journey: Public read, Authenticated manage
+CREATE POLICY "Allow public read journey" ON public.journey_entries FOR SELECT USING (true);
+CREATE POLICY "Allow owner manage journey" ON public.journey_entries FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Achievements: Public read, Authenticated manage
+CREATE POLICY "Allow public read achievements" ON public.achievements FOR SELECT USING (true);
+CREATE POLICY "Allow owner manage achievements" ON public.achievements FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Resumes: Public can only read approved current resume, Authenticated can see all
+CREATE POLICY "Allow public read approved resumes" ON public.resumes FOR SELECT USING (is_current_approved = true);
+CREATE POLICY "Allow owner manage resumes" ON public.resumes FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Media: Public read, Authenticated manage
+CREATE POLICY "Allow public read media" ON public.media_assets FOR SELECT USING (true);
+CREATE POLICY "Allow owner manage media" ON public.media_assets FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Settings: Only authenticated owner can read/write
+CREATE POLICY "Allow owner manage settings" ON public.admin_settings FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- Auto-update updated_at timestamp triggers
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+CREATE TRIGGER update_profiles_updated_at BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+CREATE TRIGGER update_worlds_updated_at BEFORE UPDATE ON public.worlds FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+CREATE TRIGGER update_projects_updated_at BEFORE UPDATE ON public.projects FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+-- Migration helpers for incremental additions
+ALTER TABLE public.achievements ADD COLUMN IF NOT EXISTS certificate_file_url TEXT DEFAULT '';
+ALTER TABLE public.achievements ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'award';
+ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS models_methods TEXT DEFAULT '';
+ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS dataset_info TEXT DEFAULT '';
+ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS architecture_description TEXT DEFAULT '';
+ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS thumbnail_url TEXT DEFAULT '';
+ALTER TABLE public.skills ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
+ALTER TABLE public.resumes ADD COLUMN IF NOT EXISTS custom_sections JSONB DEFAULT '[]'::jsonb;
+
+-- Custom Sections table
+CREATE TABLE IF NOT EXISTS public.resume_custom_sections (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    resume_id UUID REFERENCES public.resumes(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    content JSONB DEFAULT '[]'::jsonb,
+    display_order INT DEFAULT 0,
+    visible BOOLEAN DEFAULT true,
+    source TEXT DEFAULT 'manual',
+    created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()),
+    updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW())
+);
+
+ALTER TABLE public.resume_custom_sections ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow public read visible resume_custom_sections" ON public.resume_custom_sections FOR SELECT USING (visible = true);
+CREATE POLICY "Allow authenticated owner manage resume_custom_sections" ON public.resume_custom_sections FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- =========================================================================
+-- STORAGE BUCKETS & STORAGE RLS POLICIES
+-- =========================================================================
+INSERT INTO storage.buckets (id, name, public) 
+VALUES ('portfolio-media', 'portfolio-media', true)
+ON CONFLICT (id) DO NOTHING;
+
+-- Public can read all media assets
+CREATE POLICY "Allow public read portfolio-media" 
+ON storage.objects FOR SELECT 
+USING (bucket_id = 'portfolio-media');
+
+-- Authenticated owner can upload, replace, and delete media
+CREATE POLICY "Allow authenticated owner upload portfolio-media" 
+ON storage.objects FOR INSERT 
+TO authenticated 
+WITH CHECK (bucket_id = 'portfolio-media');
+
+CREATE POLICY "Allow authenticated owner update portfolio-media" 
+ON storage.objects FOR UPDATE 
+TO authenticated 
+USING (bucket_id = 'portfolio-media');
+
+CREATE POLICY "Allow authenticated owner delete portfolio-media" 
+ON storage.objects FOR DELETE 
+TO authenticated 
+USING (bucket_id = 'portfolio-media');
+
+-- Migration support for project links
+ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS documentation_url TEXT DEFAULT '';
+
+-- Migration support for coding profile links
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS leetcode_url TEXT DEFAULT '';
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS hackerrank_url TEXT DEFAULT '';
