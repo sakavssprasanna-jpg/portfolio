@@ -19,6 +19,8 @@ export const SettingsControl: React.FC = () => {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('veera_gemini_api_key') || '');
   const [keySaved, setKeySaved] = useState(false);
   const [backupStatus, setBackupStatus] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
 
   const handleSaveApiKey = (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,9 +29,32 @@ export const SettingsControl: React.FC = () => {
     setTimeout(() => setKeySaved(false), 2500);
   };
 
+  const handleSyncToSupabase = async () => {
+    if (!confirm('This will safely synchronize all your local offline portfolio data (profile, worlds, projects, skills, journey, achievements, and resumes) into your connected Supabase Cloud database. Existing data will NOT be deleted. Proceed?')) {
+      return;
+    }
+    setIsSyncing(true);
+    setSyncResult(null);
+    try {
+      const res = await dbService.syncLocalToSupabase();
+      if (res.success) {
+        await refreshData();
+        setSyncResult(`Successfully synchronized ${res.count} items to Supabase Cloud!`);
+        setTimeout(() => setSyncResult(null), 5000);
+      } else {
+        alert(res.error || 'Failed to sync to Supabase.');
+      }
+    } catch (err: any) {
+      console.error('Sync failed', err);
+      alert('Failed to sync to Supabase: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const handleExportBackup = async () => {
     try {
-      const [profile, worlds, projects, skills, journey, achievements, resumes, media] = await Promise.all([
+      const [profile, worlds, projects, skills, journey, achievements, resumes, customSections, media] = await Promise.all([
         dbService.getProfile(),
         dbService.getWorlds(),
         dbService.getProjects(),
@@ -37,6 +62,7 @@ export const SettingsControl: React.FC = () => {
         dbService.getJourney(),
         dbService.getAchievements(),
         dbService.getAllResumes(),
+        dbService.getCustomSections(),
         dbService.getMediaAssets()
       ]);
 
@@ -52,6 +78,7 @@ export const SettingsControl: React.FC = () => {
           journey,
           achievements,
           resumes,
+          custom_sections: customSections,
           media
         }
       };
@@ -103,6 +130,12 @@ export const SettingsControl: React.FC = () => {
       }
       if (parsed.data.achievements) {
         for (const a of parsed.data.achievements) await dbService.saveAchievement(a);
+      }
+      if (parsed.data.resumes) {
+        for (const r of parsed.data.resumes) await dbService.saveResumeVersion(r);
+      }
+      if (parsed.data.custom_sections) {
+        for (const cs of parsed.data.custom_sections) await dbService.saveCustomSection(cs);
       }
 
       await refreshData();
@@ -164,6 +197,29 @@ export const SettingsControl: React.FC = () => {
             <li>Run the SQL script from <code className="text-cyan-300">supabase/schema.sql</code> in the Supabase SQL Editor.</li>
           </ol>
         </div>
+
+        {isSupabaseConfigured() && (
+          <div className="pt-3 border-t border-slate-800 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+            <button
+              onClick={handleSyncToSupabase}
+              disabled={isSyncing}
+              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-bold text-xs font-mono flex items-center gap-2 transition-all cursor-pointer shadow-glow-cyan disabled:opacity-50"
+            >
+              <Upload className="w-4 h-4" />
+              {isSyncing ? 'Syncing to Supabase Cloud...' : '🚀 Push Local Vault Data to Supabase Cloud'}
+            </button>
+            <span className="text-[11px] font-mono text-slate-400">
+              Safely uploads all local offline projects, skills, journey, worlds, and profile data to Supabase without deleting anything.
+            </span>
+          </div>
+        )}
+
+        {syncResult && (
+          <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs font-mono flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            <span>{syncResult}</span>
+          </div>
+        )}
       </div>
 
       {/* Gemini AI API Key for Resume Intelligence */}

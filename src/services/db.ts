@@ -271,7 +271,7 @@ export const dbService = {
           .from('projects')
           .select('*')
           .order('display_order', { ascending: true });
-        if (!error && data) return data as Project[];
+        if (!error && data && data.length > 0) return data as Project[];
       } catch (err) {
         console.warn('Falling back to local projects mirror', err);
       }
@@ -322,7 +322,7 @@ export const dbService = {
           .from('skills')
           .select('*')
           .order('display_order', { ascending: true });
-        if (!error && data) return data as Skill[];
+        if (!error && data && data.length > 0) return data as Skill[];
       } catch (err) {
         console.warn('Falling back to local skills mirror', err);
       }
@@ -387,7 +387,7 @@ export const dbService = {
           .from('journey_entries')
           .select('*')
           .order('display_order', { ascending: true });
-        if (!error && data) return data as JourneyEntry[];
+        if (!error && data && data.length > 0) return data as JourneyEntry[];
       } catch (err) {
         console.warn('Falling back to local journey mirror', err);
       }
@@ -452,7 +452,7 @@ export const dbService = {
           .from('achievements')
           .select('*')
           .order('display_order', { ascending: true });
-        if (!error && data) return data as Achievement[];
+        if (!error && data && data.length > 0) return data as Achievement[];
       } catch (err) {
         console.warn('Falling back to local achievements mirror', err);
       }
@@ -520,7 +520,7 @@ export const dbService = {
           .from('resumes')
           .select('*')
           .order('upload_date', { ascending: false });
-        if (!error && data) return data as ResumeVersion[];
+        if (!error && data && data.length > 0) return data as ResumeVersion[];
       } catch (err) {
         console.warn('Falling back to local resumes mirror', err);
       }
@@ -737,7 +737,7 @@ export const dbService = {
     if (isSupabaseConfigured() && supabase) {
       try {
         const { data, error } = await supabase.from('media_assets').select('*').order('created_at', { ascending: false });
-        if (!error && data) return data as MediaAsset[];
+        if (!error && data && data.length > 0) return data as MediaAsset[];
       } catch (err) {
         console.warn('Falling back to local media mirror', err);
       }
@@ -786,5 +786,84 @@ export const dbService = {
       achievementsCount: achievements.length,
       resumeVersionsCount: resumes.length,
     };
+  },
+
+  // --- SAFE DATA MIGRATION: LOCAL VAULT -> SUPABASE CLOUD ---
+  async syncLocalToSupabase(): Promise<{ success: boolean; count: number; error?: string }> {
+    if (!isSupabaseConfigured() || !supabase) {
+      return { success: false, count: 0, error: 'Supabase is not configured yet. Configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY first.' };
+    }
+
+    try {
+      let syncedCount = 0;
+
+      // 1. Profile
+      const localProfile = getLocal<Profile | null>(KEYS.PROFILE, null);
+      if (localProfile) {
+        const { error } = await supabase.from('profiles').upsert(localProfile);
+        if (!error) syncedCount++;
+      }
+
+      // 2. Worlds
+      const localWorlds = getLocal<World[]>(KEYS.WORLDS, []);
+      for (const w of localWorlds) {
+        const { error } = await supabase.from('worlds').upsert(w);
+        if (!error) syncedCount++;
+      }
+
+      // 3. Projects
+      const localProjects = getLocal<Project[]>(KEYS.PROJECTS, []);
+      for (const p of localProjects) {
+        const { error } = await supabase.from('projects').upsert(p);
+        if (!error) syncedCount++;
+      }
+
+      // 4. Skills
+      const localSkills = getLocal<Skill[]>(KEYS.SKILLS, []);
+      for (const s of localSkills) {
+        const { error } = await supabase.from('skills').upsert(s);
+        if (!error) syncedCount++;
+      }
+
+      // 5. Journey
+      const localJourney = getLocal<JourneyEntry[]>(KEYS.JOURNEY, []);
+      for (const j of localJourney) {
+        const { error } = await supabase.from('journey_entries').upsert(j);
+        if (!error) syncedCount++;
+      }
+
+      // 6. Achievements
+      const localAchievements = getLocal<Achievement[]>(KEYS.ACHIEVEMENTS, []);
+      for (const a of localAchievements) {
+        const { error } = await supabase.from('achievements').upsert(a);
+        if (!error) syncedCount++;
+      }
+
+      // 7. Resumes
+      const localResumes = getLocal<ResumeVersion[]>(KEYS.RESUMES, []);
+      for (const r of localResumes) {
+        const { error } = await supabase.from('resumes').upsert(r);
+        if (!error) syncedCount++;
+      }
+
+      // 8. Custom Sections
+      const localSections = getLocal<ResumeCustomSection[]>(KEYS.CUSTOM_SECTIONS, []);
+      for (const cs of localSections) {
+        const { error } = await supabase.from('resume_custom_sections').upsert(cs);
+        if (!error) syncedCount++;
+      }
+
+      // 9. Media Assets catalog
+      const localMedia = getLocal<MediaAsset[]>(KEYS.MEDIA, []);
+      for (const m of localMedia) {
+        const { error } = await supabase.from('media_assets').upsert(m);
+        if (!error) syncedCount++;
+      }
+
+      return { success: true, count: syncedCount };
+    } catch (err: any) {
+      console.error('Error synchronizing local data to Supabase:', err);
+      return { success: false, count: 0, error: err?.message || 'Failed to synchronize data.' };
+    }
   }
 };
